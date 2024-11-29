@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  cheatmark:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+      - ./src:/app/src  # For development hot-reload
+      - ./template:/app/template
+      - ./test:/app/test  # Mount test directory
+    environment:
+      - PYTHONPATH=/app 
