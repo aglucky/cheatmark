@@ -29,7 +29,6 @@ class ConversionResponse(BaseModel):
 
 def normalize_path(path: str) -> str:
     """Normalize file paths for Docker environment"""
-    # Remove .md extension if present
     path = path.replace('.md', '')
     
     # Handle absolute paths from host system
@@ -46,7 +45,7 @@ def normalize_path(path: str) -> str:
         
     return path
 
-def render_latex(path: str) -> None:
+def render_latex(path: str, template_config: TemplateConfig) -> None:
     normalized_path = normalize_path(path)
     
     if not os.path.exists(f"{normalized_path}.md"):
@@ -59,23 +58,19 @@ def render_latex(path: str) -> None:
         "pandoc",
         "--from=markdown",
         f"--output={normalized_path}.tex",
-        "-F",
-        "mermaid-filter",
         f"{normalized_path}.md",
     ]
     result = subprocess.run(pandoc_command, capture_output=True, text=True)
     if result.returncode != 0:
         raise HTTPException(status_code=500, detail=f"Pandoc error: {result.stderr}")
+    create_final_tex(normalized_path, template_config)
 
 def get_template_path(filename: str) -> str:
-    """Get absolute path to template file"""
-    # Assuming templates are in /app/template/ in Docker
     return os.path.join("/app/template", filename)
 
-def render_pdf(path: str, template_config: TemplateConfig) -> None:
+def create_final_tex(path: str, template_config: TemplateConfig) -> None:
     with open(f"{path}_temp.tex", "w") as final_tex:
         try:
-            # Read header template
             header_path = get_template_path("HEADER.txt")
             with open(header_path, "r") as header_file:
                 header_template = Template(header_file.read())
@@ -96,25 +91,25 @@ def render_pdf(path: str, template_config: TemplateConfig) -> None:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"File operation error: {str(e)}")
     
+def render_pdf(path: str) -> None:
     try:
         # Get absolute paths
         abs_path = os.path.abspath(path)
         working_dir = os.path.dirname(abs_path)
         base_name = os.path.basename(path)
+
         
-        # Ensure working directory exists
-        os.makedirs(working_dir, exist_ok=True)
+        pdflatex_command = [        
+            "pdflatex",
+            "-synctex=1",
+            "-interaction=nonstopmode",
+            "-file-line-error",
+            "-output-directory", working_dir,
+            f"{base_name}_temp.tex",
+        ]
         
-        # Run pdflatex with full error output
         result = subprocess.run(
-            [
-                "pdflatex",
-                "-synctex=1",
-                "-interaction=nonstopmode",
-                "-file-line-error",
-                "-output-directory", working_dir,
-                f"{base_name}_temp.tex",
-            ],
+            pdflatex_command,
             cwd=working_dir,
             text=True,
             capture_output=True,
@@ -122,11 +117,9 @@ def render_pdf(path: str, template_config: TemplateConfig) -> None:
         )
         
         if result.returncode != 0:
-            # Combine stderr and stdout for complete error information
             error_output = result.stderr + "\n" + result.stdout
             error_msg = error_output.strip() if error_output.strip() else "PDFLatex failed without error output"
             
-            # Add context information
             full_error = (
                 f"PDFLatex Error (Return Code {result.returncode}):\n"
                 f"Working Directory: {working_dir}\n"
@@ -151,7 +144,6 @@ def render_pdf(path: str, template_config: TemplateConfig) -> None:
         )
 
 def clean_up(path: str) -> None:
-    """Clean up temporary files after PDF generation"""
     try:
         if os.path.exists(f"{path}_temp.pdf"):
             os.rename(f"{path}_temp.pdf", f"{path}.pdf")
@@ -159,7 +151,6 @@ def clean_up(path: str) -> None:
         if os.path.exists(f"{path}_temp.tex"):
             os.rename(f"{path}_temp.tex", f"{path}.tex")
 
-        # Clean up auxiliary files
         dir_path = os.path.dirname(path)
         base_name = os.path.basename(path)
         for file in os.listdir(dir_path):
@@ -170,20 +161,14 @@ def clean_up(path: str) -> None:
 
 @app.post("/convert", response_model=ConversionResponse)
 async def convert_to_pdf(request: ConversionRequest):
-    """
-    Convert a markdown file to PDF using LaTeX.
-    
-    - **path**: Path to the markdown file (without extension)
-    - **template_config**: Optional configuration for the PDF layout
-    """
     if not request.path:
         raise HTTPException(status_code=400, detail="Path cannot be empty")
         
     try:
         normalized_path = normalize_path(request.path)
         template_config = request.template_config or TemplateConfig()
-        render_latex(normalized_path)
-        render_pdf(normalized_path, template_config)
+        render_latex(normalized_path, template_config)
+        render_pdf(normalized_path)
         clean_up(normalized_path)
         
         # Verify the PDF was actually created
