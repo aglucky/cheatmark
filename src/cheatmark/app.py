@@ -12,6 +12,7 @@ app = FastAPI(
     title="CheatMark", description="Convert markdown files to PDF cheat sheets"
 )
 
+
 class TemplateConfig(BaseModel):
     fontSize: str = "5pt"
     lineSpacing: str = "5pt"
@@ -33,66 +34,87 @@ class ConversionResponse(BaseModel):
     output_path: str
     template_config: dict
 
+
 def getFileName(path: str) -> str:
     return os.path.basename(path).split(".")[0]
+
 
 def get_template_path(file_name: str) -> str:
     print(os.getcwd())
     return os.path.join("./template", file_name)
     return os.path.join("/app/template", file_name)
 
-def render_latex(file_name: str, template_config: TemplateConfig) -> None:
+
+def render_latex(
+    file_name: str, template_config: TemplateConfig, errors: list[str]
+) -> list[str]:
     pandoc_command = [
         "pandoc",
         "--from=markdown",
-        f"--output={file_name}.tex",
+        f"--output={file_name}_temp.tex",
         f"{file_name}.md",
     ]
     result = subprocess.run(
         pandoc_command, capture_output=True, text=True, encoding="utf-8", cwd=OUTPUT_DIR
     )
     if result.returncode != 0:
-        raise HTTPException(status_code=500, detail=f"Pandoc error: {result.stderr}")
-    create_final_tex(file_name, template_config)
+        errors.append(f"Pandoc error: {result.stderr}")
+
+    if not os.path.exists(os.path.join(OUTPUT_DIR, f"{file_name}.tex")):
+        errors.append(f"Pandoc failed to create file {file_name}.tex")
+        return errors
+
+    create_final_tex(file_name, template_config, errors)
+    return errors
 
 
-
-def create_final_tex(file_name: str, template_config: TemplateConfig) -> None:
-    with open(os.path.join(OUTPUT_DIR, f"{file_name}_temp.tex"), "w", encoding="utf-8") as final_tex:
-        try:
+def create_final_tex(
+    file_name: str, template_config: TemplateConfig, errors: list[str]
+) -> list[str]:
+    try:
+        with open(
+            os.path.join(OUTPUT_DIR, f"{file_name}.tex"), "w", encoding="utf-8"
+        ) as final_tex:
             header_path = get_template_path("HEADER.txt")
-            with open(header_path, "r", encoding="utf-8") as header_file:
-                header_template = Template(header_file.read())
-                header_data = template_config.model_dump()
-                final_tex.write(header_template.substitute(header_data))
+            try:
+                with open(header_path, "r", encoding="utf-8") as header_file:
+                    header_template = Template(header_file.read())
+                    header_data = template_config.model_dump()
+                    final_tex.write(header_template.substitute(header_data))
+            except FileNotFoundError:
+                errors.append(f"Template file not found: {header_path}")
+                return errors
 
-            # Read content
-            with open(os.path.join(OUTPUT_DIR, f"{file_name}.tex"), "r", encoding="utf-8") as content_file:
-                final_tex.write(content_file.read())
+            try:
+                with open(
+                    os.path.join(OUTPUT_DIR, f"{file_name}_temp.tex"), "r", encoding="utf-8"
+                ) as content_file:
+                    final_tex.write(content_file.read())
+            except FileNotFoundError:
+                errors.append(f"Content file not found: {file_name}.tex")
+                return errors
 
-            # Read footer
             footer_path = get_template_path("FOOTER.txt")
-            with open(footer_path, "r", encoding="utf-8") as footer_file:
-                final_tex.write(footer_file.read())
+            try:
+                with open(footer_path, "r", encoding="utf-8") as footer_file:
+                    final_tex.write(footer_file.read())
+            except FileNotFoundError:
+                errors.append(f"Template file not found: {footer_path}")
+                return errors
 
-        except FileNotFoundError as e:
-            raise HTTPException(
-                status_code=404, detail=f"Template file not found: {str(e)}"
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500, detail=f"File operation error: {str(e)}"
-            )
+    except Exception as e:
+        errors.append(f"File operation error: {str(e)}")
+
+    return errors
 
 
-def render_pdf(file_name: str) -> None:
-
+def render_pdf(file_name: str, errors: list[str]) -> list[str]:
     pdflatex_command = [
         "pdflatex",
         "-synctex=1",
         "-interaction=nonstopmode",
         "-file-line-error",
-        f"{file_name}_temp.tex",
+        f"{file_name}.tex",
     ]
 
     result = subprocess.run(
@@ -114,21 +136,25 @@ def render_pdf(file_name: str) -> None:
 
         full_error = (
             f"PDFLatex Error (Return Code {result.returncode}):\n"
-            f"Input File: {file_name}_temp.tex\n"
+            f"Input File: {file_name}.tex\n"
             f"Error Details:\n{error_msg}"
         )
+        errors.append(full_error)
 
-        raise HTTPException(status_code=500, detail=full_error)
+    if not os.path.exists(os.path.join(OUTPUT_DIR, f"{file_name}.pdf")):
+        raise Exception(f"PDFLatex failed to create file {file_name}.pdf. Errors: {errors}")
+
+    return errors
 
 
 def clean_up(path: str) -> None:
     try:
         full_path = os.path.join(OUTPUT_DIR, path)
         if os.path.exists(f"{full_path}_temp.pdf"):
-            os.rename(f"{full_path}_temp.pdf", f"{full_path}.pdf")
+            os.remove(f"{full_path}_temp.pdf")
 
         if os.path.exists(f"{full_path}_temp.tex"):
-            os.rename(f"{full_path}_temp.tex", f"{full_path}.tex")
+            os.remove(f"{full_path}_temp.tex")
 
         dir_path = os.path.dirname(full_path)
         base_name = os.path.basename(path)
@@ -145,40 +171,28 @@ def clean_up(path: str) -> None:
 async def convert_to_pdf(request: ConversionRequest):
     if not request.path:
         raise HTTPException(status_code=400, detail="Path cannot be empty")
-    file_name = getFileName(request.path)   
 
-    try:
-        template_config = request.template_config or TemplateConfig()
-        try:
-            render_latex(file_name, template_config)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error rendering LaTeX: {str(e)}")
+    file_name = getFileName(request.path)
+    template_config = request.template_config or TemplateConfig()
+    output_pdf = os.path.join(OUTPUT_DIR, f"{file_name}.pdf")
+    
+    errors = []
+    errors = render_latex(file_name, template_config, errors)
+    errors = render_pdf(file_name, errors)
+        
+    clean_up(file_name)
 
-        try:
-            render_pdf(file_name)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error rendering PDF: {str(e)}")
-
-        try:
-            clean_up(file_name)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error during cleanup: {str(e)}")
-
-        if not os.path.exists(f"{file_name}.pdf"):
-            raise HTTPException(
-                status_code=500, detail="PDF file was not created successfully"
-            )
-
-        return ConversionResponse(
-            status="success",
-            message="PDF conversion completed",
-            output_path=f"{file_name}.pdf",
-            template_config=template_config.model_dump(),
+    if not os.path.exists(output_pdf):
+        raise HTTPException(
+            status_code=500, detail="PDF file was not created successfully"
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Conversion error: {str(e)}")
+
+    return ConversionResponse(
+        status="success",
+        message="PDF conversion completed",
+        output_path=output_pdf,
+        template_config=template_config.model_dump(),
+        )
 
 
 @app.get("/health")
