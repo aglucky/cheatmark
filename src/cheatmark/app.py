@@ -32,47 +32,25 @@ class ConversionResponse(BaseModel):
     output_path: str
     template_config: dict
 
-
-def normalize_path(path: str) -> str:
-    """Normalize file paths for Docker environment"""
-    path = path.replace(".md", "")
-
-    base_dir = "test"  # Base directory for file operations
-
-    if "/cheatmark/" in path:
-        path = path.split("/cheatmark/")[-1]
-
-    path = path.lstrip("/")
-
-    if path.startswith(f"{base_dir}/"):
-        path = path[len(f"{base_dir}/") :]
-
-    if not path.startswith(f"{base_dir}/"):
-        path = f"{base_dir}/{path}"
-
-    return path
-
-
 def render_latex(path: str, template_config: TemplateConfig) -> None:
-    normalized_path = normalize_path(path)
 
-    if not os.path.exists(f"{normalized_path}.md"):
+    if not os.path.exists(f"{path}"):
         raise HTTPException(
-            status_code=404, detail=f"Input file not found: {normalized_path}.md"
+            status_code=404, detail=f"Input file not found: {path}"
         )
 
     pandoc_command = [
         "pandoc",
         "--from=markdown",
-        f"--output={normalized_path}.tex",
-        f"{normalized_path}.md",
+        f"--output={path}.tex",
+        f"{path}",
     ]
     result = subprocess.run(
         pandoc_command, capture_output=True, text=True, encoding="utf-8"
     )
     if result.returncode != 0:
         raise HTTPException(status_code=500, detail=f"Pandoc error: {result.stderr}")
-    create_final_tex(normalized_path, template_config)
+    create_final_tex(path, template_config)
 
 
 def get_template_path(filename: str) -> str:
@@ -176,13 +154,12 @@ async def convert_to_pdf(request: ConversionRequest):
         raise HTTPException(status_code=400, detail="Path cannot be empty")
 
     try:
-        normalized_path = normalize_path(request.path)
         template_config = request.template_config or TemplateConfig()
-        render_latex(normalized_path, template_config)
-        render_pdf(normalized_path)
-        clean_up(normalized_path)
+        render_latex(request.path, template_config)
+        render_pdf(request.path)
+        clean_up(request.path)
 
-        if not os.path.exists(f"{normalized_path}.pdf"):
+        if not os.path.exists(f"{request.path}.pdf"):
             raise HTTPException(
                 status_code=500, detail="PDF file was not created successfully"
             )
@@ -190,7 +167,7 @@ async def convert_to_pdf(request: ConversionRequest):
         return ConversionResponse(
             status="success",
             message="PDF conversion completed",
-            output_path=f"{normalized_path}.pdf",
+            output_path=f"{request.path}.pdf",
             template_config=template_config.model_dump(),
         )
     except HTTPException:
