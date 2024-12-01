@@ -41,12 +41,7 @@ RUN pip3 install .
 
 # Create test directory if it doesn't exist
 RUN mkdir -p /app/test && \
-    mkdir -p /data && \
-    chmod -R 777 /app/test && \
-    chmod -R 777 /data
-
-# Create a volume for data persistence
-VOLUME ["/data"]
+    chmod -R 777 /app/test
 
 # Expose the FastAPI port
 EXPOSE 8000
