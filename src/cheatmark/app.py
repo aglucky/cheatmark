@@ -40,8 +40,7 @@ def getFileName(path: str) -> str:
 
 
 def get_template_path(file_name: str) -> str:
-    print(os.getcwd())
-    return os.path.join("./template", file_name)
+    # return os.path.join("/template", file_name) # for development
     return os.path.join("/app/template", file_name)
 
 
@@ -187,6 +186,12 @@ async def convert_to_pdf(request: ConversionRequest):
             status_code=500, detail="PDF file was not created successfully"
         )
 
+    if errors:
+        error_log_path = os.path.join(OUTPUT_DIR, f"{file_name}_errors.log")
+        with open(error_log_path, 'w') as error_log:
+            for error in errors:
+                error_log.write(error + "\n")
+
     return ConversionResponse(
         status="success",
         message="PDF conversion completed",
@@ -202,4 +207,5 @@ async def health_check():
 
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    # uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True) # for development
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
