@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 import subprocess
 import os
 from string import Template
@@ -157,37 +157,26 @@ def render_pdf(file_name: str, errors: list[str]) -> list[str]:
     return errors
 
 
-def clean_up(path: str) -> None:
-    try:
-        full_path = os.path.join(OUTPUT_DIR, path)
-        if os.path.exists(f"{full_path}_temp.pdf"):
-            os.remove(f"{full_path}_temp.pdf")
-
-        if os.path.exists(f"{full_path}_temp.tex"):
-            os.remove(f"{full_path}_temp.tex")
-
-        dir_path = os.path.dirname(full_path)
-        base_name = os.path.basename(path)
-        for file in os.listdir(dir_path):
-            if file.startswith(f"{base_name}_temp") and file.endswith(
-                (".aux", ".log", ".out", ".synctex.gz")
-            ):
-                os.remove(os.path.join(dir_path, file))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cleanup error: {str(e)}")
+def cleanup_files(file_name: str):
+    extensions = ['.md', '.tex', '_temp.tex', '.pdf', '_errors.log', '.aux', '.log', '.synctex.gz']
+    for ext in extensions:
+        try:
+            file_path = os.path.join(OUTPUT_DIR, f"{file_name}{ext}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception as e:
+            print(f"Error cleaning up {file_path}: {e}")
 
 
 @app.post("/convert")
-async def convert_to_pdf(request: ConversionRequest):
+async def convert_to_pdf(request: ConversionRequest, background_tasks: BackgroundTasks):
     if not request.content:
         raise HTTPException(status_code=400, detail="Content cannot be empty")
 
-    # Generate a unique filename for this conversion
     file_name = f"cheatsheet_{os.urandom(4).hex()}"  # Generate random filename
     template_config = request.template_config or TemplateConfig()
     output_pdf = os.path.join(OUTPUT_DIR, f"{file_name}.pdf")
     
-    # Write the content to a temporary markdown file
     md_file_path = os.path.join(OUTPUT_DIR, f"{file_name}.md")
     try:
         with open(md_file_path, "w", encoding="utf-8") as f:
@@ -201,8 +190,6 @@ async def convert_to_pdf(request: ConversionRequest):
         errors = render_pdf(file_name, errors)
     except Exception as e:
         errors.append(f"Conversion error: {str(e)}")
-    
-    clean_up(file_name)
 
     if errors:
         error_log_path = os.path.join(OUTPUT_DIR, f"{file_name}_errors.log")
@@ -211,12 +198,15 @@ async def convert_to_pdf(request: ConversionRequest):
                 error_log.write(error + "\n")
 
     if os.path.exists(output_pdf):
-        return FileResponse(
+        response = FileResponse(
             path=output_pdf,
             filename=f"{file_name}.pdf",
             media_type="application/pdf",
             background=None
         )
+        # Add cleanup as a background task
+        background_tasks.add_task(cleanup_files, file_name)
+        return response
     else:
         raise HTTPException(
             status_code=500, 
