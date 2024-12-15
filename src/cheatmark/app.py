@@ -5,11 +5,22 @@ from string import Template
 from pydantic import BaseModel
 from typing import Literal, Optional
 import uvicorn
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 OUTPUT_DIR = "test"
 
 app = FastAPI(
     title="CheatMark", description="Convert markdown files to PDF cheat sheets"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # Add your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
 
@@ -24,7 +35,7 @@ class TemplateConfig(BaseModel):
 
 
 class ConversionRequest(BaseModel):
-    path: str
+    content: str
     template_config: Optional[TemplateConfig] = None
 
 
@@ -59,7 +70,7 @@ def render_latex(
     if result.returncode != 0:
         errors.append(f"Pandoc error: {result.stderr}")
 
-    if not os.path.exists(os.path.join(OUTPUT_DIR, f"{file_name}.tex")):
+    if not os.path.exists(os.path.join(OUTPUT_DIR, f"{file_name}_temp.tex")):
         errors.append(f"Pandoc failed to create file {file_name}.tex")
         return errors
 
@@ -166,25 +177,32 @@ def clean_up(path: str) -> None:
         raise HTTPException(status_code=500, detail=f"Cleanup error: {str(e)}")
 
 
-@app.post("/convert", response_model=ConversionResponse)
+@app.post("/convert")
 async def convert_to_pdf(request: ConversionRequest):
-    if not request.path:
-        raise HTTPException(status_code=400, detail="Path cannot be empty")
+    if not request.content:
+        raise HTTPException(status_code=400, detail="Content cannot be empty")
 
-    file_name = getFileName(request.path)
+    # Generate a unique filename for this conversion
+    file_name = f"cheatsheet_{os.urandom(4).hex()}"  # Generate random filename
     template_config = request.template_config or TemplateConfig()
     output_pdf = os.path.join(OUTPUT_DIR, f"{file_name}.pdf")
     
-    errors = []
-    errors = render_latex(file_name, template_config, errors)
-    errors = render_pdf(file_name, errors)
-        
-    clean_up(file_name)
+    # Write the content to a temporary markdown file
+    md_file_path = os.path.join(OUTPUT_DIR, f"{file_name}.md")
+    try:
+        with open(md_file_path, "w", encoding="utf-8") as f:
+            f.write(request.content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write markdown file: {str(e)}")
 
-    if not os.path.exists(output_pdf):
-        raise HTTPException(
-            status_code=500, detail="PDF file was not created successfully"
-        )
+    errors = []
+    try:
+        errors = render_latex(file_name, template_config, errors)
+        errors = render_pdf(file_name, errors)
+    except Exception as e:
+        errors.append(f"Conversion error: {str(e)}")
+    
+    clean_up(file_name)
 
     if errors:
         error_log_path = os.path.join(OUTPUT_DIR, f"{file_name}_errors.log")
@@ -192,11 +210,17 @@ async def convert_to_pdf(request: ConversionRequest):
             for error in errors:
                 error_log.write(error + "\n")
 
-    return ConversionResponse(
-        status="success",
-        message="PDF conversion completed",
-        output_path=output_pdf,
-        template_config=template_config.model_dump(),
+    if os.path.exists(output_pdf):
+        return FileResponse(
+            path=output_pdf,
+            filename=f"{file_name}.pdf",
+            media_type="application/pdf",
+            background=None
+        )
+    else:
+        raise HTTPException(
+            status_code=500, 
+            detail="PDF file was not created successfully. Errors: " + "; ".join(errors)
         )
 
 
@@ -207,5 +231,4 @@ async def health_check():
 
 
 if __name__ == "__main__":
-    # uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True) # for development
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)

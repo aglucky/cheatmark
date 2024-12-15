@@ -3,7 +3,6 @@
 \usepackage{scrextend}
 \changefontsizes[$lineSpacing]{$fontSize}\usepackage[utf8]{inputenc}
 
-\usepackage{unicode-math-input}
 \usepackage{longtable}
 \usepackage[ngerman]{babel}
 \usepackage[T1]{fontenc}
