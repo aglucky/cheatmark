@@ -24,7 +24,6 @@
 
 \include{template/def}
 
-
 \providecommand{\tightlist}{%
   \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 
@@ -33,5 +32,5 @@
 \begin{document}
 %\footnotesize
 \small
-\begin{multicols*}{$columnNum}
+$if_multicol_start
 

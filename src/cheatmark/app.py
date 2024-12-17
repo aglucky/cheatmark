@@ -90,6 +90,11 @@ def create_final_tex(
                 with open(header_path, "r", encoding="utf-8") as header_file:
                     header_template = Template(header_file.read())
                     header_data = template_config.model_dump()
+                    header_data["if_multicol_start"] = (
+                        "\\begin{multicols*}{" + header_data["columnNum"] + "}"
+                        if int(header_data["columnNum"]) > 1
+                        else ""
+                    )
                     final_tex.write(header_template.substitute(header_data))
             except FileNotFoundError:
                 errors.append(f"Template file not found: {header_path}")
@@ -107,7 +112,13 @@ def create_final_tex(
             footer_path = get_template_path("FOOTER.txt")
             try:
                 with open(footer_path, "r", encoding="utf-8") as footer_file:
-                    final_tex.write(footer_file.read())
+                    footer_template = Template(footer_file.read())
+                    footer_data = {
+                        "if_multicol_end": "\\end{multicols*}" 
+                        if int(template_config.columnNum) > 1 
+                        else ""
+                    }
+                    final_tex.write(footer_template.substitute(footer_data))
             except FileNotFoundError:
                 errors.append(f"Template file not found: {footer_path}")
                 return errors
